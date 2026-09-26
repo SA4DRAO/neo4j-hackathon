@@ -79,7 +79,10 @@ def overview(customer_id, session_id):
         "collect({action: step[$action_key], intent: step[$intent_key], target_product: step[$product_key], "
         "issue_type: step[$issue_key], intent_confidence: step[$intent_confidence_key], product_confidence: step[$product_confidence_key], "
         "issue_confidence: step[$issue_confidence_key], threshold: step[$threshold_key], needs_clarification: step[$clarification_key], "
-        "reason: step[$reason_key], result_count: step[$result_count_key], ticket_id: step[$ticket_id_key], outcome: step[$outcome_key]}) AS steps "
+        "ticket_action: step[$ticket_action_key], response_mode: step[$response_mode_key], next_step: step[$next_step_key], "
+        "action_confidence: step[$action_confidence_key], response_confidence: step[$response_confidence_key], "
+        "next_step_confidence: step[$next_step_confidence_key], reason: step[$reason_key], "
+        "result_count: step[$result_count_key], ticket_id: step[$ticket_id_key], outcome: step[$outcome_key]}) AS steps "
         "ORDER BY started_at DESC LIMIT 4",
         customer_id=customer_id,
         action_key="action",
@@ -91,6 +94,12 @@ def overview(customer_id, session_id):
         issue_confidence_key="issue_confidence",
         threshold_key="threshold",
         clarification_key="needs_clarification",
+        ticket_action_key="ticket_action",
+        response_mode_key="response_mode",
+        next_step_key="next_step",
+        action_confidence_key="action_confidence",
+        response_confidence_key="response_confidence",
+        next_step_confidence_key="next_step_confidence",
         reason_key="reason",
         result_count_key="result_count",
         ticket_id_key="ticket_id",
@@ -115,7 +124,8 @@ def customers():
         "WITH c, count(t) AS ticket_count, "
         "sum(CASE WHEN t.status IN ['Open', 'Pending Customer Response'] THEN 1 ELSE 0 END) AS active "
         "WHERE ticket_count > 1 "
-        "RETURN c.id AS id, c.name AS name, ticket_count, active ORDER BY active DESC, ticket_count DESC LIMIT 20"
+        "RETURN c.id AS id, c.name AS name, ticket_count, active "
+        "ORDER BY CASE WHEN c.id = 'demo@relay.local' THEN 0 ELSE 1 END, active DESC, ticket_count DESC LIMIT 20"
     )
 
 

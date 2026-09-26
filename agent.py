@@ -175,6 +175,7 @@ def classify_node(state):
         state["candidates"],
         state["purchased_products"],
         pending=state["session"],
+        semantic_memory=state["semantic_memory"],
     )
     return {"classification": result.model_dump()}
 
@@ -191,6 +192,9 @@ def record_decision(state):
         "CREATE (step:ReasoningStep {id: $step_id, action: 'classify_with_jev', intent: $intent, "
         "target_product: $product, issue_type: $issue_type, intent_confidence: $intent_confidence, "
         "product_confidence: $product_confidence, issue_confidence: $issue_confidence, "
+        "ticket_action: $ticket_action, response_mode: $response_mode, next_step: $next_step, "
+        "action_confidence: $action_confidence, response_confidence: $response_confidence, "
+        "next_step_confidence: $next_step_confidence, "
         "threshold: $threshold, needs_clarification: $needs_clarification, reason: $reason, created_at: datetime()}) "
         "MERGE (trace)-[:HAS_STEP]->(step) "
         "WITH step OPTIONAL MATCH (product:Product {name: $product}) "
@@ -203,6 +207,12 @@ def record_decision(state):
         intent_confidence=decision["intent_confidence"],
         product_confidence=decision["product_confidence"],
         issue_confidence=decision["issue_confidence"],
+        ticket_action=decision["ticket_action"],
+        response_mode=decision["response_mode"],
+        next_step=decision["next_step"],
+        action_confidence=decision["action_confidence"],
+        response_confidence=decision["response_confidence"],
+        next_step_confidence=decision["next_step_confidence"],
         threshold=CONFIDENCE_THRESHOLD,
         needs_clarification=decision["needs_clarification"],
         reason=reason,
@@ -212,7 +222,7 @@ def record_decision(state):
 
 def retrieve(state):
     classification = state["classification"]
-    if classification["intent"] not in {"FOLLOW_UP", "ESCALATION"}:
+    if classification["ticket_action"] not in {"UPDATE", "CLOSE"}:
         return {"history": []}
     records = query(
         "MATCH (c:Customer {id: $id})-[:OPENED]->(t:Ticket) "
@@ -253,11 +263,12 @@ def mutate(state):
     message = state["message"]
     decision = state["classification"]
     intent = decision["intent"]
+    ticket_action = decision["ticket_action"]
     history = state["history"]
     ticket_id = history[0]["ticket_id"] if history else None
-    if intent == "CHITCHAT":
+    if ticket_action == "NONE":
         return {"ticket_id": None}
-    if intent == "NEW_ISSUE" or (intent in {"FOLLOW_UP", "ESCALATION"} and not ticket_id):
+    if ticket_action == "CREATE":
         ticket_id = f"SUP-{uuid4().hex[:12]}"
         query(
             "MATCH (c:Customer {id: $customer_id}) "
@@ -272,6 +283,8 @@ def mutate(state):
             intent=intent,
             product=decision["target_product"],
         )
+    elif ticket_id is None:
+        return {"ticket_id": None}
 
     interaction_id = str(uuid4())
     query(
@@ -287,7 +300,7 @@ def mutate(state):
         summary=message[:280],
         intent=intent,
         ticket_id=ticket_id,
-        resolved=decision["is_resolved"],
+        resolved=ticket_action == "CLOSE",
     )
     if state.get("session_key"):
         query(
@@ -341,13 +354,16 @@ def generate(state):
         "Acknowledge relevant prior interactions, do not ask for information already present, and give "
         "one practical next step. The imported ticket descriptions may be synthetic; rely on their subject, "
         "product, status, and category instead. If the user says the issue is fixed, acknowledge that and "
-        "do not offer another troubleshooting step. Do not invent policies or purchase details.\n\n"
+        "do not offer another troubleshooting step. Do not invent policies or purchase details. "
+        "The structured policy is authoritative: follow its response mode and give only its bounded next step.\n\n"
         f"Customer products: {json.dumps(state['purchased_products'], ensure_ascii=True, default=str)}\n"
         f"Short-term conversation memory: {json.dumps(state['short_term_memory'], ensure_ascii=True, default=str)}\n"
         f"Long-term facts: {json.dumps(state['long_term_memory'], ensure_ascii=True, default=str)}\n"
         f"Prior decision summaries: {json.dumps(state['reasoning_memory'], ensure_ascii=True, default=str)}\n"
         f"Semantic memory matches: {json.dumps(state['semantic_memory'], ensure_ascii=True, default=str)}\n"
         f"Retrieved ticket context: {json.dumps(state['history'], ensure_ascii=True, default=str)}\n"
+        f"Structured policy: response_mode={decision['response_mode']}, next_step={decision['next_step']}, "
+        f"ticket_action={decision['ticket_action']}\n"
         f"Current decision: {json.dumps(decision, default=str)}\n"
         f"Current message: {state['message']}"
     )

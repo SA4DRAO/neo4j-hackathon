@@ -13,6 +13,7 @@ class AgentGraphTests(unittest.TestCase):
             "classification": {
                 "intent": "FOLLOW_UP",
                 "target_product": "Camera",
+                "ticket_action": "UPDATE",
                 "is_resolved": False,
             },
         }
@@ -35,6 +36,7 @@ class AgentGraphTests(unittest.TestCase):
             "classification": {
                 "intent": "NEW_ISSUE",
                 "target_product": "Camera",
+                "ticket_action": "CREATE",
                 "is_resolved": False,
             },
             "history": [],
@@ -56,6 +58,7 @@ class AgentGraphTests(unittest.TestCase):
             "classification": {
                 "intent": "FOLLOW_UP",
                 "target_product": "Camera",
+                "ticket_action": "CLOSE",
                 "is_resolved": True,
             },
             "history": [{"ticket_id": "TICKET-42"}],
@@ -120,6 +123,7 @@ class AgentGraphTests(unittest.TestCase):
             "classification": {
                 "intent": "FOLLOW_UP",
                 "target_product": "Camera",
+                "ticket_action": "CLOSE",
                 "is_resolved": True,
             },
             "history": [{"ticket_id": "TICKET-42"}],
@@ -137,6 +141,9 @@ class AgentGraphTests(unittest.TestCase):
             "intent": "NEW_ISSUE", "intent_confidence": 0.99,
             "target_product": "Camera", "product_confidence": 0.40,
             "issue_type": "ACCESS_DENIED", "issue_confidence": 0.30,
+            "ticket_action": "CREATE", "action_confidence": 0.99,
+            "response_mode": "TROUBLESHOOT", "response_confidence": 0.99,
+            "next_step": "ASK_FOR_DETAILS", "next_step_confidence": 0.99,
             "is_resolved": False,
         }
 
@@ -154,6 +161,9 @@ class AgentGraphTests(unittest.TestCase):
             "intent": "NEW_ISSUE", "intent_confidence": 0.99,
             "target_product": "Camera", "product_confidence": 0.99,
             "issue_type": "ACCESS_DENIED", "issue_confidence": 0.99,
+            "ticket_action": "CREATE", "action_confidence": 0.99,
+            "response_mode": "TROUBLESHOOT", "response_confidence": 0.99,
+            "next_step": "CHECK_ACCOUNT_ACCESS", "next_step_confidence": 0.99,
             "is_resolved": False,
         }
 
@@ -169,6 +179,9 @@ class AgentGraphTests(unittest.TestCase):
             "intent": "NEW_ISSUE", "intent_confidence": 0.20,
             "target_product": "Camera", "product_confidence": 0.99,
             "issue_type": "BILLING", "issue_confidence": 0.99,
+            "ticket_action": "CREATE", "action_confidence": 0.99,
+            "response_mode": "TROUBLESHOOT", "response_confidence": 0.99,
+            "next_step": "CHECK_BILLING", "next_step_confidence": 0.99,
             "is_resolved": False,
         }
 
@@ -184,6 +197,28 @@ class AgentGraphTests(unittest.TestCase):
         self.assertEqual(result.intent, "NEW_ISSUE")
         self.assertEqual(result.target_product, "Camera")
         self.assertEqual(result.issue_type, "BILLING")
+
+    def test_semantic_memory_confirms_a_selected_product(self):
+        decision = {
+            "intent": "FOLLOW_UP", "intent_confidence": 0.98,
+            "target_product": "Camera", "product_confidence": 0.30,
+            "issue_type": "TECHNICAL_BUG", "issue_confidence": 0.99,
+            "ticket_action": "UPDATE", "action_confidence": 0.98,
+            "response_mode": "TROUBLESHOOT", "response_confidence": 0.99,
+            "next_step": "CHECK_CONNECTION", "next_step_confidence": 0.99,
+            "is_resolved": False,
+        }
+
+        with patch("classifier._jev_decide", return_value=decision):
+            result = classifier.classify(
+                "It is still failing.",
+                [],
+                ["Camera"],
+                semantic_memory=[{"content": "Camera | TECHNICAL_BUG", "score": 0.60}],
+            )
+
+        self.assertFalse(result.needs_clarification)
+        self.assertGreaterEqual(result.product_confidence, classifier.CONFIDENCE_THRESHOLD)
 
 
 if __name__ == "__main__":
