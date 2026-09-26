@@ -174,6 +174,22 @@ class AgentGraphTests(unittest.TestCase):
         self.assertEqual(result.target_product, "Camera")
         self.assertEqual(result.issue_type, "ACCESS_DENIED")
 
+    def test_complete_issue_is_not_blocked_by_action_confidence(self):
+        decision = {
+            "intent": "NEW_ISSUE", "intent_confidence": 1.0,
+            "target_product": "Camera", "product_confidence": 1.0,
+            "issue_type": "TECHNICAL_BUG", "issue_confidence": 1.0,
+            "ticket_action": "CREATE", "action_confidence": 0.70,
+            "response_mode": "TROUBLESHOOT", "response_confidence": 0.90,
+            "next_step": "RETRY_ACTIVATION", "next_step_confidence": 0.90,
+            "is_resolved": False,
+        }
+
+        with patch("classifier._jev_decide", return_value=decision):
+            result = classifier.classify("Camera will not activate.", [], ["Camera"])
+
+        self.assertFalse(result.needs_clarification)
+
     def test_verified_session_slots_complete_the_next_message(self):
         decision = {
             "intent": "NEW_ISSUE", "intent_confidence": 0.20,

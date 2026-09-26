@@ -206,7 +206,7 @@ def classify(message, candidates, purchased_products, pending=None, semantic_mem
         if corroborated:
             product_confidence = CONFIDENCE_THRESHOLD
 
-    needs_clarification = response_mode == "CLARIFY" or intent_confidence < CONFIDENCE_THRESHOLD or action_confidence < CONFIDENCE_THRESHOLD or (
+    needs_clarification = response_mode == "CLARIFY" or intent_confidence < CONFIDENCE_THRESHOLD or (
         intent in {"NEW_ISSUE", "ESCALATION"}
         and (
             product_confidence < CONFIDENCE_THRESHOLD
