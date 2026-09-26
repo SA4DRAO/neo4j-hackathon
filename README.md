@@ -1,30 +1,63 @@
-# Graph-memory support agent
+# Relay Memory
 
-Copy `.env.example` values into the ignored `.env` file and set `OPENROUTER_API_KEY`.
-Both the classifier and the reply generator route through OpenRouter with that key:
-`JEV_MODEL` (default `typesafe/jev-1.13`) makes the structured decision, `CHAT_MODEL`
-(default `openai/gpt-4o-mini`) generates the customer-facing reply — Jev's endpoint
-only outputs structured decisions, not free text, so a separate chat model still
-drafts the reply from Jev's decision plus graph context.
+Relay is a customer-support agent that remembers returning customers. A normal
+agent asks them to repeat the product and issue on every turn. Relay stores the
+support history in Neo4j, retrieves the relevant context later, and updates the
+right ticket.
+
+## The Demo Story
+
+Select **DEMO / Alex Morgan** in the UI, then send:
+
+```text
+My Relay Office Suite activation will not start. This is a new issue.
+```
+
+Jev chooses `NEW_ISSUE / CREATE / TROUBLESHOOT`, and Relay stores the ticket,
+conversation, fact, and reasoning trace in Neo4j.
+
+Then send a product-free follow-up:
+
+```text
+Activation still fails after reboot.
+```
+
+Relay retrieves the prior Office activation memory through Neo4j vector search
+and graph traversal. Jev chooses `FOLLOW_UP / UPDATE`, so the agent updates the
+existing ticket rather than asking which product the customer means.
+
+The UI shows this proof in three places:
+
+- **Memory Layers:** persisted conversation, fact, and Jev decision.
+- **Decision Trace:** the selected policy, retrieved ticket count, and outcome.
+- **Live Execution Trace:** vector recall, Jev decision, graph retrieval, mutation, and response.
+
+## Run It
+
+Copy `.env.example` to `.env`, then set Neo4j Aura values and `OPENROUTER_API_KEY`.
 
 ```sh
 .venv/bin/python import_dataset.py
 .venv/bin/python embed_memory.py
-.venv/bin/python test_classifier.py
-.venv/bin/python -m unittest -v
 .venv/bin/python seed_demo.py
-.venv/bin/python agent.py
 .venv/bin/python app.py
 ```
 
-Open `http://127.0.0.1:8000` for the demo UI. It runs the same LangGraph agent
-as the CLI and shows its persisted Neo4j tickets, interactions, and clarification session.
+Open `http://127.0.0.1:8000`.
 
-## Architecture
+Useful checks:
+
+```sh
+.venv/bin/python -m unittest -v
+.venv/bin/python test_classifier.py
+```
+
+## How It Works
 
 Jev is the policy controller, not the prose generator. It converts each message
-into a bounded decision; LangGraph executes that decision against Neo4j; the chat
-model only turns the selected policy and retrieved context into a customer-facing reply.
+into a bounded decision. LangGraph executes that decision against Neo4j. A separate
+OpenRouter chat model only turns the selected policy and retrieved context into a
+customer-facing reply.
 
 ```mermaid
 flowchart LR
@@ -51,7 +84,7 @@ Jev returns these bounded fields on every turn:
 | `response_mode` | `CLARIFY`, `TROUBLESHOOT`, `STATUS`, `ESCALATE` | Reply strategy |
 | `next_step` | Approved support actions only | The one actionable recommendation |
 
-## Memory Graph
+## What Neo4j Remembers
 
 ```mermaid
 flowchart TB
@@ -72,27 +105,12 @@ flowchart TB
 	Step -->|USED_MEMORY| Ticket
 ```
 
-- **Short-term memory:** ordered `Conversation` and `Message` nodes per session.
-- **Long-term memory:** customer/product/ticket graph plus durable `Fact` nodes.
-- **Reasoning memory:** Jev decision, confidence scores, retrieved tickets, and outcome in `ReasoningTrace` steps.
-- **Semantic recall:** OpenRouter embeddings on `Message` and `Fact` nodes are retrieved through Neo4j vector indexes.
+- **Short-term:** `Conversation` and ordered `Message` nodes for the active session.
+- **Long-term:** customers, purchased products, tickets, interactions, and durable `Fact` nodes.
+- **Reasoning:** Jev decisions, confidence scores, retrieved tickets, and outcomes in `ReasoningTrace` steps.
+- **Semantic:** embeddings on `Message` and `Fact` nodes, retrieved through Neo4j vector indexes.
 
-The importer is idempotent and adds the 8,469 ticket rows as `Customer`, `Product`,
-`Ticket`, and `Interaction` nodes using the plan's relationships. The source has
-139 repeat customers, three real statuses, and 42 products. Its descriptions are
-synthetic/noisy, so the agent uses ticket subjects for memory summaries and does not
-send raw descriptions to the response model.
-
-Jev scores the message against controlled intent, product, issue, ticket action,
-response mode, and next-step labels. It can only choose a product recorded in the
-customer graph. The confidence gate routes uncertain decisions to a persisted
-`SupportSession`; otherwise, the selected policy drives ticket mutation and response
-generation. Product-free follow-ups can use semantic retrieval of earlier `Message`
-and `Fact` embeddings to corroborate a Jev-selected product before asking the customer
-to repeat information. Pass an optional second argument to `agent.py` to isolate
-concurrent sessions for the same customer: `python agent.py <customer-id> <session-id>`.
-
-The LangGraph routing, confidence gate, and mutation behavior are covered by offline
-unit tests (`test_agent.py`, mocking the Jev call). `test_classifier.py` is a live
-smoke test against the real Jev endpoint and requires imported data plus a working
-`OPENROUTER_API_KEY`.
+The importer loads 8,469 support tickets, 8,320 customers, and 42 products. Jev can
+only select a product owned by the current customer. If required context is genuinely
+missing, the confidence gate persists a `SupportSession` and asks one focused question
+instead of mutating a ticket.
