@@ -84,6 +84,54 @@ Jev returns these bounded fields on every turn:
 | `response_mode` | `CLARIFY`, `TROUBLESHOOT`, `STATUS`, `ESCALATE` | Reply strategy |
 | `next_step` | Approved support actions only | The one actionable recommendation |
 
+## How a Message Executes
+
+Every message runs through a 12-node LangGraph state machine. The graph is the
+skeleton, Neo4j is the memory, Jev is the policy brain, and the prose LLM only
+writes the final words. The LLM never decides what happens to the graph — Jev's
+structured decision does.
+
+```mermaid
+flowchart TD
+	START([Message in]) --> extract[1. EXTRACT]
+	extract --> begin_trace[2. BEGIN TRACE]
+	begin_trace --> load_session[3. LOAD SESSION]
+	load_session --> load_memory[4. LOAD MEMORY]
+	load_memory --> classify[5. JEV DECISION]
+	classify --> record_decision[6. RECORD DECISION]
+	record_decision --> gate{7. CONFIDENCE GATE}
+	gate -->|needs clarification| clarify[8a. CLARIFY]
+	gate -->|policy accepted| retrieve[8b. RETRIEVE]
+	retrieve --> record_retrieval[9. RECORD RETRIEVAL]
+	record_retrieval --> mutate[10. MUTATE]
+	mutate --> generate[11. GENERATE]
+	generate --> complete_trace[12. COMPLETE TRACE]
+	clarify --> complete_trace
+	complete_trace --> END([Response out])
+```
+
+| # | Node | What it does |
+|---|---|---|
+| 1 | `extract` | Runs spaCy candidate extraction, loads the customer's purchased products from the graph, and computes the `session_key` that scopes all memory to this person + conversation. |
+| 2 | `begin_trace` | **Writes before it thinks.** Persists the user `Message` (with embedding), creates the `ReasoningTrace` (status `running`), and a first `ReasoningStep`. The turn is auditable even if the agent later fails. |
+| 3 | `load_session` | Reads any pending `SupportSession` slots (`pending_intent`, `pending_product`, `pending_issue_type`) left over from a previous clarification. |
+| 4 | `load_memory` | Loads all four memory layers: last 6 messages (short-term), up to 6 `Fact` nodes (long-term), last 4 prior Jev decisions (reasoning), and vector recall — top-4 similar `Message` + `Fact` embeddings (semantic). |
+| 5 | `classify` | Calls Jev's Decisions API with 7 structured questions (intent, product, issue, ticket action, response mode, next step, is_resolved), each returning a choice + confidence. Then deterministic post-processing: merges confirmed session slots, applies semantic corroboration (a semantic match ≥ 0.5 naming the same product lifts low product confidence to the threshold), and computes `needs_clarification`. |
+| 6 | `record_decision` | Persists the full Jev decision as a `ReasoningStep` with every confidence score, the threshold, and the reason. Links it to the classified `Product`. |
+| 7 | Confidence gate | `needs_clarification` is true when `response_mode = CLARIFY`, or intent confidence < 0.85, or (intent is `NEW_ISSUE`/`ESCALATION` and product or issue confidence < 0.85). Action confidence is deliberately **not** a blocker. |
+| 8a | `clarify` | MERGEs a `SupportSession` storing only the high-confidence slots, sets `last_question`, and returns the clarification question. The turn ends; the next message picks the confirmed slots back up in step 3. |
+| 8b | `retrieve` | Only for `UPDATE`/`CLOSE`. Finds the customer's open tickets matching the product, with their interaction history. |
+| 9 | `record_retrieval` | Persists a `retrieve_ticket_memory` step linked (`USED_MEMORY`) to the tickets used. |
+| 10 | `mutate` | The only place business data changes, driven entirely by `ticket_action`: `CREATE` → new open `Ticket` + `REGARDS` product link; `UPDATE` → new `Interaction` on the existing ticket; `CLOSE` → new `Interaction` + ticket status `Closed`; `NONE` → no ticket change. Always records an `Interaction` and clears the `SupportSession`. |
+| 11 | `generate` | Builds one prompt from all loaded context (products, short-term, long-term, reasoning, semantic, retrieved tickets, and the authoritative Jev policy) and calls the prose LLM (`gpt-4o-mini`, temperature 0.3). The prompt states the structured policy is authoritative — the LLM only writes words. |
+| 12 | `complete_trace` | Persists the assistant `Message` (with embedding), commits a `Fact` when a ticket + issue type exist, adds a final `complete_turn` step, and marks the trace `complete`. |
+
+The three memory layers in one line each:
+
+- **Short-term** — the `Conversation`/`Message` chain: what was just said.
+- **Long-term** — `Fact` nodes: durable "customer reported X on product Y".
+- **Reasoning** — `ReasoningTrace`/`ReasoningStep`: the full audit log of every Jev decision.
+
 ## What Neo4j Remembers
 
 ```mermaid
